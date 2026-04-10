@@ -1,14 +1,14 @@
 {
-  "name": "logistica-mubin-bot",
+  "name": "transportes-regisbot",
   "version": "1.0.0",
-  "description": "Bot de Telegram para logística MUBIN",
+  "description": "Bot de Telegram para Transportes Regis",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "@anthropic-ai/sdk": "^0.24.0",
-    "axios": "^1.7.0"
+    "axios": "^1.7.0",
+    "googleapis": "^140.0.0"
   }
 }
