@@ -9,6 +9,6 @@
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "axios": "^1.7.0",
-    "googleapis": "^140.0.0"
+    "googleapis": "^139.0.0"
   }
 }
