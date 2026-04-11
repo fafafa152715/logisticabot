@@ -5,7 +5,7 @@ const { google } = require('googleapis');
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID;
-const SHEET_ID = '1QL7OvJYnAYxTXcD23sD51oUAbuNUs8-gpbVWkBY3CCk';
+const SHEET_ID = '1i7uciYXLNuZ-DPxE8H0TAQyuegqVzegE751tUNhi7Qc';
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const userState = {};
