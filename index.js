@@ -10,7 +10,21 @@ const SHEET_BOT = '1i7uciYXLNuZ-DPxE8H0TAQyuegqVzegE751tUNhi7Qc';
 const SHEET_GASTOS = '18_jX-spnW30USMbCwKTEYB0shvSg7fVnRtBdGPTX6Xg';
 const SHEET_DIESEL = '1tEmPW1BGE7MgMXD5iOsLwq8G46GxKkT8sRuqBkdFUOk';
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+// Manejo del conflicto 409 — elimina webhook antes de iniciar polling
+const bot = new TelegramBot(TOKEN, { polling: false });
+
+async function iniciarBot() {
+  try {
+    await bot.deleteWebHook();
+    await new Promise(r => setTimeout(r, 2000));
+    bot.startPolling({ interval: 300, params: { timeout: 10 } });
+    console.log('🚛 Bot Transportes Regis iniciado...');
+  } catch (e) {
+    console.error('Error iniciando bot:', e.message);
+    process.exit(1);
+  }
+}
+
 const userState = {};
 
 function getSheetsClient() {
@@ -149,7 +163,7 @@ bot.onText(/\/registrar (.+)/, async (msg, match) => {
   const tracto = parts[1];
   try {
     await saveOperador(chatId, nombre, tracto);
-    bot.sendMessage(chatId, `✅ Registrado como *${nombre}* - Tracto #${tracto}\n\nComandos disponibles:\n/gastos - Reportar gastos\n/sello - Reportar sello`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `✅ Registrado como *${nombre}* - Tracto #${tracto}\n\nComandos:\n/gastos - Reportar gastos\n/sello - Reportar sello`, { parse_mode: 'Markdown' });
     if (ADMIN_ID) bot.sendMessage(ADMIN_ID, `🚛 Nuevo operador: *${nombre}* - Tracto #${tracto}`, { parse_mode: 'Markdown' });
   } catch (e) {
     console.error(e);
@@ -309,11 +323,16 @@ bot.on('message', async (msg) => {
       const total = ['comida','aguas','casetas','pension','federales','bono','otros']
         .reduce((s, k) => s + (parseFloat(d[k]) || 0), 0);
       const diferencia = (parseFloat(d.anticipo) || 0) - total;
-      await appendRow(SHEET_GASTOS, 'GASTOS_BOT', [
-        fecha, operador.nombre, d.destino, d.dias,
-        d.anticipo, d.comida, d.aguas, d.casetas,
-        d.pension, d.federales, d.otros, total, diferencia, 'P', ''
-      ]);
+      try {
+        await appendRow(SHEET_GASTOS, 'GASTOS_BOT', [
+          fecha, operador.nombre, d.destino, d.dias,
+          d.anticipo, d.comida, d.aguas, d.casetas,
+          d.pension, d.federales, d.otros, total, diferencia, 'P', ''
+        ]);
+        console.log('Gastos guardados OK');
+      } catch(e) {
+        console.error('ERROR guardando gastos:', e.message);
+      }
       const resumen = `✅ *Gastos guardados*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino} (${d.dias} día/s)\n📅 ${fecha}\n\n🍽️ Comida: $${d.comida}\n💧 Aguas: $${d.aguas}\n🛣️ Casetas: $${d.casetas}\n🅿️ Pensión: $${d.pension}\n🚔 Federales: $${d.federales}\n⭐ Bono: $${d.bono}\n📦 Otros: $${d.otros}\n💵 Anticipo: $${d.anticipo}\n\n*Total: $${total}*\n*Diferencia: $${diferencia}*`;
       bot.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
       if (ADMIN_ID) bot.sendMessage(ADMIN_ID, resumen, { parse_mode: 'Markdown' });
@@ -335,9 +354,8 @@ bot.on('message', async (msg) => {
       const fecha = new Date().toLocaleDateString('es-MX');
       const difKm = (parseFloat(d.km_nuevo) || 0) - (parseFloat(d.km_ant) || 0);
       const rend = difKm > 0 && parseFloat(d.litros) > 0 ? (difKm / parseFloat(d.litros)).toFixed(3) : 0;
-      const hojaTracto = `ECO #${d.tracto}`;
       try {
-        await appendRow(SHEET_DIESEL, hojaTracto, [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
+        await appendRow(SHEET_DIESEL, `ECO #${d.tracto}`, [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
       } catch(e) {
         await appendRow(SHEET_DIESEL, 'ACUMULADO', [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
       }
@@ -374,4 +392,4 @@ bot.on('photo', async (msg) => {
   bot.sendMessage(chatId, 'Para reportar gastos usa /gastos\nPara un sello usa /sello');
 });
 
-console.log('🚛 Bot Transportes Regis iniciado...');
+iniciarBot();
