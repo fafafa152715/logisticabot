@@ -309,7 +309,7 @@ bot.on('message', async (msg) => {
       const total = ['comida','aguas','casetas','pension','federales','bono','otros']
         .reduce((s, k) => s + (parseFloat(d[k]) || 0), 0);
       const diferencia = (parseFloat(d.anticipo) || 0) - total;
-      await appendRow(SHEET_GASTOS, 'CONCENTRADO', [
+      await appendRow(SHEET_GASTOS, 'Hoja 1', [
         fecha, operador.nombre, d.destino, d.dias,
         d.anticipo, d.comida, d.aguas, d.casetas,
         d.pension, d.federales, d.otros, total, diferencia, 'P', ''
