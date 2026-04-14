@@ -1,16 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
 const { google } = require('googleapis');
 
 const TOKEN = process.env.BOT_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID;
 
 const SHEET_BOT = '1i7uciYXLNuZ-DPxE8H0TAQyuegqVzegE751tUNhi7Qc';
-const SHEET_GASTOS = '18_jX-spnW30USMbCwKTEYB0shvSg7fVnRtBdGPTX6Xg';
 const SHEET_DIESEL = '1tEmPW1BGE7MgMXD5iOsLwq8G46GxKkT8sRuqBkdFUOk';
 
-// Manejo del conflicto 409 — elimina webhook antes de iniciar polling
 const bot = new TelegramBot(TOKEN, { polling: false });
 
 async function iniciarBot() {
@@ -113,6 +109,18 @@ async function asignarOperadorViaje(idx, nombreOperador) {
   });
 }
 
+async function ensureGastosHeader() {
+  const rows = await getRows(SHEET_BOT, 'Gastos');
+  if (rows.length === 0) {
+    await appendRow(SHEET_BOT, 'Gastos', [
+      'Fecha', 'Operador', 'Tracto', 'Destino', 'Días',
+      'Anticipo', 'Comida', 'Aguas', 'Casetas',
+      'Pensión', 'Federales', 'Bono', 'Otros',
+      'Total', 'Diferencia'
+    ]);
+  }
+}
+
 const PREGUNTAS_GASTOS = [
   { campo: 'destino',   pregunta: '📍 ¿A dónde fuiste?' },
   { campo: 'dias',      pregunta: '📅 ¿Cuántos días duró el viaje?' },
@@ -141,6 +149,8 @@ const PREGUNTAS_SELLO = [
   { campo: 'destino',   pregunta: '📍 ¿Destino?' },
   { campo: 'caja',      pregunta: '📦 ¿Número de caja?' },
 ];
+
+// ── COMANDOS ──────────────────────────────────────────────
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
@@ -268,11 +278,14 @@ bot.onText(/\/resumen/, async (msg) => {
   }
 });
 
+// ── FLUJOS DE CONVERSACIÓN ────────────────────────────────
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const estado = userState[chatId]?.estado;
   if (!msg.text || msg.text.startsWith('/')) return;
 
+  // ── Registrar viajes ──
   if (estado === 'esperando_viajes') {
     if (msg.text.toLowerCase() === 'fin') {
       userState[chatId] = { estado: null };
@@ -295,6 +308,7 @@ bot.on('message', async (msg) => {
     return bot.sendMessage(chatId, `✅ ${agregados} viajes agregados. Sigue o escribe *fin*`, { parse_mode: 'Markdown' });
   }
 
+  // ── Remisión ──
   if (estado === 'esperando_remision') {
     const ops = await getOperadores();
     const operador = ops[String(chatId)];
@@ -306,6 +320,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ── Gastos ──
   if (estado === 'gastos') {
     const paso = userState[chatId].paso;
     const campo = PREGUNTAS_GASTOS[paso].campo;
@@ -320,18 +335,34 @@ bot.on('message', async (msg) => {
       const d = userState[chatId].datos;
       userState[chatId] = { estado: null };
       const fecha = new Date().toLocaleDateString('es-MX');
-      const total = ['comida','aguas','casetas','pension','federales','bono','otros']
+      const total = ['comida', 'aguas', 'casetas', 'pension', 'federales', 'bono', 'otros']
         .reduce((s, k) => s + (parseFloat(d[k]) || 0), 0);
       const diferencia = (parseFloat(d.anticipo) || 0) - total;
       try {
-        await appendRow(SHEET_GASTOS, 'GASTOS_BOT', [
-          fecha, operador.nombre, d.destino, d.dias,
-          d.anticipo, d.comida, d.aguas, d.casetas,
-          d.pension, d.federales, d.otros, total, diferencia, 'P', ''
+        await ensureGastosHeader();
+        // ✅ Ahora guarda en SHEET_BOT pestaña "Gastos"
+        await appendRow(SHEET_BOT, 'Gastos', [
+          fecha,
+          operador.nombre,
+          operador.tracto,
+          d.destino,
+          d.dias,
+          d.anticipo,
+          d.comida,
+          d.aguas,
+          d.casetas,
+          d.pension,
+          d.federales,
+          d.bono,
+          d.otros,
+          total,
+          diferencia
         ]);
-        console.log('Gastos guardados OK');
-      } catch(e) {
-        console.error('ERROR guardando gastos:', e.message);
+        console.log('✅ Gastos guardados en SHEET_BOT pestaña Gastos');
+      } catch (e) {
+        console.error('❌ ERROR guardando gastos:', e.message);
+        bot.sendMessage(chatId, '⚠️ Hubo un error guardando los gastos. Avisa al administrador.');
+        return;
       }
       const resumen = `✅ *Gastos guardados*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino} (${d.dias} día/s)\n📅 ${fecha}\n\n🍽️ Comida: $${d.comida}\n💧 Aguas: $${d.aguas}\n🛣️ Casetas: $${d.casetas}\n🅿️ Pensión: $${d.pension}\n🚔 Federales: $${d.federales}\n⭐ Bono: $${d.bono}\n📦 Otros: $${d.otros}\n💵 Anticipo: $${d.anticipo}\n\n*Total: $${total}*\n*Diferencia: $${diferencia}*`;
       bot.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
@@ -340,6 +371,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ── Diésel ──
   if (estado === 'diesel') {
     const paso = userState[chatId].paso;
     const campo = PREGUNTAS_DIESEL[paso].campo;
@@ -356,7 +388,7 @@ bot.on('message', async (msg) => {
       const rend = difKm > 0 && parseFloat(d.litros) > 0 ? (difKm / parseFloat(d.litros)).toFixed(3) : 0;
       try {
         await appendRow(SHEET_DIESEL, `ECO #${d.tracto}`, [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
-      } catch(e) {
+      } catch (e) {
         await appendRow(SHEET_DIESEL, 'ACUMULADO', [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
       }
       bot.sendMessage(chatId, `⛽ *Diésel registrado*\n\n👤 ${d.operador} - Tracto #${d.tracto}\n📅 ${fecha}\n📏 Km recorridos: ${difKm}\n💧 Litros: ${d.litros}\n📊 Rendimiento: ${rend} km/lt\n🔢 Vale: ${d.vale}`, { parse_mode: 'Markdown' });
@@ -364,6 +396,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ── Sello ──
   if (estado === 'sello') {
     const paso = userState[chatId].paso;
     const campo = PREGUNTAS_SELLO[paso].campo;
