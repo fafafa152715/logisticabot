@@ -121,6 +121,19 @@ async function ensureGastosHeader() {
   }
 }
 
+// ── VALIDACIÓN NUMÉRICA ──────────────────────────────────
+function esNumeroValido(texto) {
+  const limpio = texto.trim().replace(',', '.');
+  return !isNaN(parseFloat(limpio)) && isFinite(limpio);
+}
+
+function parsearNumero(texto) {
+  return parseFloat(texto.trim().replace(',', '.')) || 0;
+}
+
+// Campos que requieren validación numérica
+const CAMPOS_NUMERICOS = ['dias', 'comida', 'aguas', 'casetas', 'pension', 'federales', 'bono', 'otros', 'anticipo'];
+
 const PREGUNTAS_GASTOS = [
   { campo: 'destino',   pregunta: '📍 ¿A dónde fuiste?' },
   { campo: 'dias',      pregunta: '📅 ¿Cuántos días duró el viaje?' },
@@ -324,8 +337,17 @@ bot.on('message', async (msg) => {
   if (estado === 'gastos') {
     const paso = userState[chatId].paso;
     const campo = PREGUNTAS_GASTOS[paso].campo;
-    userState[chatId].datos[campo] = msg.text.trim();
+    const texto = msg.text.trim();
+
+    // Validación numérica para campos que lo requieren
+    if (CAMPOS_NUMERICOS.includes(campo) && !esNumeroValido(texto)) {
+      bot.sendMessage(chatId, `❌ *Solo números por favor.*\n\n${PREGUNTAS_GASTOS[paso].pregunta}\n\nEjemplo: 250 o 0`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    userState[chatId].datos[campo] = texto;
     const sig = paso + 1;
+
     if (sig < PREGUNTAS_GASTOS.length) {
       userState[chatId].paso = sig;
       bot.sendMessage(chatId, PREGUNTAS_GASTOS[sig].pregunta);
@@ -335,38 +357,41 @@ bot.on('message', async (msg) => {
       const d = userState[chatId].datos;
       userState[chatId] = { estado: null };
       const fecha = new Date().toLocaleDateString('es-MX');
+
       const total = ['comida', 'aguas', 'casetas', 'pension', 'federales', 'bono', 'otros']
-        .reduce((s, k) => s + (parseFloat(d[k]) || 0), 0);
-      const diferencia = (parseFloat(d.anticipo) || 0) - total;
+        .reduce((s, k) => s + parsearNumero(d[k]), 0);
+      const anticipo = parsearNumero(d.anticipo);
+      const diferencia = anticipo - total;
+
       try {
         await ensureGastosHeader();
-        // ✅ Ahora guarda en SHEET_BOT pestaña "Gastos"
         await appendRow(SHEET_BOT, 'Gastos', [
-          fecha,
-          operador.nombre,
-          operador.tracto,
-          d.destino,
-          d.dias,
-          d.anticipo,
-          d.comida,
-          d.aguas,
-          d.casetas,
-          d.pension,
-          d.federales,
-          d.bono,
-          d.otros,
-          total,
-          diferencia
+          fecha, operador.nombre, operador.tracto, d.destino, d.dias,
+          anticipo, parsearNumero(d.comida), parsearNumero(d.aguas),
+          parsearNumero(d.casetas), parsearNumero(d.pension),
+          parsearNumero(d.federales), parsearNumero(d.bono),
+          parsearNumero(d.otros), total, diferencia
         ]);
-        console.log('✅ Gastos guardados en SHEET_BOT pestaña Gastos');
       } catch (e) {
         console.error('❌ ERROR guardando gastos:', e.message);
-        bot.sendMessage(chatId, '⚠️ Hubo un error guardando los gastos. Avisa al administrador.');
+        bot.sendMessage(chatId, '⚠️ Error guardando gastos. Avisa al administrador.');
         return;
       }
-      const resumen = `✅ *Gastos guardados*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino} (${d.dias} día/s)\n📅 ${fecha}\n\n🍽️ Comida: $${d.comida}\n💧 Aguas: $${d.aguas}\n🛣️ Casetas: $${d.casetas}\n🅿️ Pensión: $${d.pension}\n🚔 Federales: $${d.federales}\n⭐ Bono: $${d.bono}\n📦 Otros: $${d.otros}\n💵 Anticipo: $${d.anticipo}\n\n*Total: $${total}*\n*Diferencia: $${diferencia}*`;
+
+      // Determinar estado de la diferencia
+      const estadoDif = diferencia >= 0
+        ? `✅ *Te sobran: $${diferencia.toFixed(2)}*`
+        : `🔴 *Debes: $${Math.abs(diferencia).toFixed(2)}*`;
+
+      const resumen = `✅ *Gastos guardados*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino} (${d.dias} día/s)\n📅 ${fecha}\n\n🍽️ Comida: $${parsearNumero(d.comida)}\n💧 Aguas: $${parsearNumero(d.aguas)}\n🛣️ Casetas: $${parsearNumero(d.casetas)}\n🅿️ Pensión: $${parsearNumero(d.pension)}\n🚔 Federales: $${parsearNumero(d.federales)}\n⭐ Bono: $${parsearNumero(d.bono)}\n📦 Otros: $${parsearNumero(d.otros)}\n💵 Anticipo: $${anticipo}\n\n*Total gastos: $${total.toFixed(2)}*\n${estadoDif}`;
+
       bot.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
-      if (ADMIN_ID) bot.sendMessage(ADMIN_ID, resumen, { parse_mode: 'Markdown' });
+
+      // ── ALERTA AL ADMIN si diferencia negativa ──
+      if (ADMIN_ID && diferencia < 0) {
+        const alerta = `⚠️ *ALERTA — Diferencia negativa*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino}\n📅 ${fecha}\n\n💵 Anticipo: $${anticipo}\n💸 Total gastos: $${total.toFixed(2)}\n🔴 *Diferencia: -$${Math.abs(diferencia).toFixed(2)}*\n\nEl operador gastó más de lo anticipado.`;
+        bot.sendMessage(ADMIN_ID, alerta, { parse_mode: 'Markdown' });
+      }
     }
     return;
   }
@@ -384,14 +409,15 @@ bot.on('message', async (msg) => {
       const d = userState[chatId].datos;
       userState[chatId] = { estado: null };
       const fecha = new Date().toLocaleDateString('es-MX');
-      const difKm = (parseFloat(d.km_nuevo) || 0) - (parseFloat(d.km_ant) || 0);
-      const rend = difKm > 0 && parseFloat(d.litros) > 0 ? (difKm / parseFloat(d.litros)).toFixed(3) : 0;
+      const difKm = parsearNumero(d.km_nuevo) - parsearNumero(d.km_ant);
+      const litros = parsearNumero(d.litros);
+      const rend = difKm > 0 && litros > 0 ? (difKm / litros).toFixed(3) : 0;
       try {
-        await appendRow(SHEET_DIESEL, `ECO #${d.tracto}`, [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
+        await appendRow(SHEET_DIESEL, `ECO #${d.tracto}`, [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, litros, rend, '']);
       } catch (e) {
-        await appendRow(SHEET_DIESEL, 'ACUMULADO', [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, d.litros, rend, '']);
+        await appendRow(SHEET_DIESEL, 'ACUMULADO', [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, litros, rend, '']);
       }
-      bot.sendMessage(chatId, `⛽ *Diésel registrado*\n\n👤 ${d.operador} - Tracto #${d.tracto}\n📅 ${fecha}\n📏 Km recorridos: ${difKm}\n💧 Litros: ${d.litros}\n📊 Rendimiento: ${rend} km/lt\n🔢 Vale: ${d.vale}`, { parse_mode: 'Markdown' });
+      bot.sendMessage(chatId, `⛽ *Diésel registrado*\n\n👤 ${d.operador} - Tracto #${d.tracto}\n📅 ${fecha}\n📏 Km recorridos: ${difKm}\n💧 Litros: ${litros}\n📊 Rendimiento: ${rend} km/lt\n🔢 Vale: ${d.vale}`, { parse_mode: 'Markdown' });
     }
     return;
   }
