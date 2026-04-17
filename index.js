@@ -2,7 +2,25 @@ const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
 
 const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID;
+
+// ── MÚLTIPLES ADMINS ──────────────────────────────────────
+// Lee ADMIN_TELEGRAM_IDS (plural, separados por coma) o cae a ADMIN_TELEGRAM_ID (viejo)
+const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(s => s.length > 0);
+
+function isAdmin(chatId) {
+  return ADMIN_IDS.includes(String(chatId));
+}
+
+function notificarAdmins(mensaje, opciones = {}) {
+  ADMIN_IDS.forEach(adminId => {
+    bot.sendMessage(adminId, mensaje, opciones).catch(e => {
+      console.error(`No se pudo notificar a admin ${adminId}:`, e.message);
+    });
+  });
+}
 
 const SHEET_BOT = '1i7uciYXLNuZ-DPxE8H0TAQyuegqVzegE751tUNhi7Qc';
 const SHEET_DIESEL = '1tEmPW1BGE7MgMXD5iOsLwq8G46GxKkT8sRuqBkdFUOk';
@@ -15,6 +33,8 @@ async function iniciarBot() {
     await new Promise(r => setTimeout(r, 2000));
     bot.startPolling({ interval: 300, params: { timeout: 10 } });
     console.log('🚛 Bot Transportes Regis iniciado...');
+    console.log(`👥 Administradores configurados: ${ADMIN_IDS.length}`);
+    ADMIN_IDS.forEach(id => console.log(`   - Admin ID: ${id}`));
   } catch (e) {
     console.error('Error iniciando bot:', e.message);
     process.exit(1);
@@ -131,7 +151,6 @@ function parsearNumero(texto) {
   return parseFloat(texto.trim().replace(',', '.')) || 0;
 }
 
-// Campos que requieren validación numérica
 const CAMPOS_NUMERICOS = ['dias', 'comida', 'aguas', 'casetas', 'pension', 'federales', 'bono', 'otros', 'anticipo'];
 
 const PREGUNTAS_GASTOS = [
@@ -167,8 +186,7 @@ const PREGUNTAS_SELLO = [
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const isAdmin = String(chatId) === String(ADMIN_ID);
-  if (isAdmin) {
+  if (isAdmin(chatId)) {
     bot.sendMessage(chatId,
       `👋 *Bienvenido Admin!*\n\n📋 *Comandos:*\n\n/nuevos_viajes - Registrar viajes\n/ver_viajes - Ver viajes\n/operadores - Ver operadores\n/diesel - Registrar diésel\n/resumen - Ver resumen`,
       { parse_mode: 'Markdown' });
@@ -187,7 +205,7 @@ bot.onText(/\/registrar (.+)/, async (msg, match) => {
   try {
     await saveOperador(chatId, nombre, tracto);
     bot.sendMessage(chatId, `✅ Registrado como *${nombre}* - Tracto #${tracto}\n\nComandos:\n/gastos - Reportar gastos\n/sello - Reportar sello`, { parse_mode: 'Markdown' });
-    if (ADMIN_ID) bot.sendMessage(ADMIN_ID, `🚛 Nuevo operador: *${nombre}* - Tracto #${tracto}`, { parse_mode: 'Markdown' });
+    notificarAdmins(`🚛 Nuevo operador: *${nombre}* - Tracto #${tracto}`, { parse_mode: 'Markdown' });
   } catch (e) {
     console.error(e);
     bot.sendMessage(chatId, '❌ Error al registrar. Intenta de nuevo.');
@@ -196,7 +214,7 @@ bot.onText(/\/registrar (.+)/, async (msg, match) => {
 
 bot.onText(/\/operadores/, async (msg) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return;
+  if (!isAdmin(chatId)) return;
   const ops = await getOperadores();
   if (Object.keys(ops).length === 0) return bot.sendMessage(chatId, '❌ No hay operadores registrados.');
   let lista = '🚛 *Operadores:*\n\n';
@@ -206,7 +224,7 @@ bot.onText(/\/operadores/, async (msg) => {
 
 bot.onText(/\/nuevos_viajes/, (msg) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return;
+  if (!isAdmin(chatId)) return;
   userState[chatId] = { estado: 'esperando_viajes' };
   bot.sendMessage(chatId,
     `📋 *Viajes de la semana*\n\nEnvía uno por línea:\nFECHA | CLIENTE | DESTINO | HORA\n\nEjemplo:\nLunes 13 | Conagra | Local | 4:30pm\n\nEscribe *fin* cuando termines`,
@@ -215,7 +233,7 @@ bot.onText(/\/nuevos_viajes/, (msg) => {
 
 bot.onText(/\/ver_viajes/, async (msg) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return;
+  if (!isAdmin(chatId)) return;
   const viajes = await getViajes();
   if (viajes.length === 0) return bot.sendMessage(chatId, '❌ No hay viajes.');
   let lista = '📋 *Viajes:*\n\n';
@@ -226,7 +244,7 @@ bot.onText(/\/ver_viajes/, async (msg) => {
 
 bot.onText(/\/asignar (\d+) (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return;
+  if (!isAdmin(chatId)) return;
   const idx = parseInt(match[1]);
   const nombreOperador = match[2].trim();
   const viajes = await getViajes();
@@ -265,7 +283,7 @@ bot.onText(/\/gastos/, async (msg) => {
 
 bot.onText(/\/diesel/, async (msg) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return bot.sendMessage(chatId, '❌ Solo el administrador registra diésel.');
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, '❌ Solo el administrador registra diésel.');
   userState[chatId] = { estado: 'diesel', paso: 0, datos: {} };
   bot.sendMessage(chatId, `⛽ *Registrar Diésel*\n\n${PREGUNTAS_DIESEL[0].pregunta}`, { parse_mode: 'Markdown' });
 });
@@ -281,7 +299,7 @@ bot.onText(/\/sello/, async (msg) => {
 
 bot.onText(/\/resumen/, async (msg) => {
   const chatId = msg.chat.id;
-  if (String(chatId) !== String(ADMIN_ID)) return;
+  if (!isAdmin(chatId)) return;
   try {
     const ops = await getOperadores();
     const viajes = await getViajes();
@@ -328,7 +346,7 @@ bot.on('message', async (msg) => {
     userState[chatId] = { estado: null };
     const fecha = new Date().toLocaleDateString('es-MX');
     await appendRow(SHEET_BOT, 'Remisiones', [fecha, operador.nombre, operador.tracto, msg.text]);
-    if (ADMIN_ID) bot.sendMessage(ADMIN_ID, `📦 *${operador.nombre}* - Tracto #${operador.tracto}\n\n${msg.text}`, { parse_mode: 'Markdown' });
+    notificarAdmins(`📦 *${operador.nombre}* - Tracto #${operador.tracto}\n\n${msg.text}`, { parse_mode: 'Markdown' });
     bot.sendMessage(chatId, '✅ Enviado. ¡Buen viaje! 🚛');
     return;
   }
@@ -339,7 +357,6 @@ bot.on('message', async (msg) => {
     const campo = PREGUNTAS_GASTOS[paso].campo;
     const texto = msg.text.trim();
 
-    // Validación numérica para campos que lo requieren
     if (CAMPOS_NUMERICOS.includes(campo) && !esNumeroValido(texto)) {
       bot.sendMessage(chatId, `❌ *Solo números por favor.*\n\n${PREGUNTAS_GASTOS[paso].pregunta}\n\nEjemplo: 250 o 0`, { parse_mode: 'Markdown' });
       return;
@@ -378,7 +395,6 @@ bot.on('message', async (msg) => {
         return;
       }
 
-      // Determinar estado de la diferencia
       const estadoDif = diferencia >= 0
         ? `✅ *Te sobran: $${diferencia.toFixed(2)}*`
         : `🔴 *Debes: $${Math.abs(diferencia).toFixed(2)}*`;
@@ -387,10 +403,12 @@ bot.on('message', async (msg) => {
 
       bot.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
 
-      // ── ALERTA AL ADMIN si diferencia negativa ──
-      if (ADMIN_ID && diferencia < 0) {
+      // Notificar a TODOS los admins el resumen
+      notificarAdmins(resumen, { parse_mode: 'Markdown' });
+
+      if (diferencia < 0) {
         const alerta = `⚠️ *ALERTA — Diferencia negativa*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📍 ${d.destino}\n📅 ${fecha}\n\n💵 Anticipo: $${anticipo}\n💸 Total gastos: $${total.toFixed(2)}\n🔴 *Diferencia: -$${Math.abs(diferencia).toFixed(2)}*\n\nEl operador gastó más de lo anticipado.`;
-        bot.sendMessage(ADMIN_ID, alerta, { parse_mode: 'Markdown' });
+        notificarAdmins(alerta, { parse_mode: 'Markdown' });
       }
     }
     return;
@@ -417,7 +435,11 @@ bot.on('message', async (msg) => {
       } catch (e) {
         await appendRow(SHEET_DIESEL, 'ACUMULADO', [fecha, d.vale, d.tracto, d.km_nuevo, d.km_ant, difKm, litros, rend, '']);
       }
-      bot.sendMessage(chatId, `⛽ *Diésel registrado*\n\n👤 ${d.operador} - Tracto #${d.tracto}\n📅 ${fecha}\n📏 Km recorridos: ${difKm}\n💧 Litros: ${litros}\n📊 Rendimiento: ${rend} km/lt\n🔢 Vale: ${d.vale}`, { parse_mode: 'Markdown' });
+      const resumenDiesel = `⛽ *Diésel registrado*\n\n👤 ${d.operador} - Tracto #${d.tracto}\n📅 ${fecha}\n📏 Km recorridos: ${difKm}\n💧 Litros: ${litros}\n📊 Rendimiento: ${rend} km/lt\n🔢 Vale: ${d.vale}`;
+      bot.sendMessage(chatId, resumenDiesel, { parse_mode: 'Markdown' });
+      ADMIN_IDS.filter(id => id !== String(chatId)).forEach(adminId => {
+        bot.sendMessage(adminId, resumenDiesel, { parse_mode: 'Markdown' }).catch(() => {});
+      });
     }
     return;
   }
@@ -440,7 +462,7 @@ bot.on('message', async (msg) => {
       await appendRow(SHEET_BOT, 'Sellos', [fecha, operador.nombre, operador.tracto, d.num_sello, d.cliente, d.destino, d.caja]);
       const resumen = `🔒 *Sello registrado*\n\n👤 ${operador.nombre} - Tracto #${operador.tracto}\n📅 ${fecha}\n🔢 Sello: ${d.num_sello}\n🏭 Cliente: ${d.cliente}\n📍 Destino: ${d.destino}\n📦 Caja: ${d.caja}`;
       bot.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
-      if (ADMIN_ID) bot.sendMessage(ADMIN_ID, resumen, { parse_mode: 'Markdown' });
+      notificarAdmins(resumen, { parse_mode: 'Markdown' });
     }
     return;
   }
