@@ -46,15 +46,16 @@ const MENU_ADMIN = {
 
 // ── PREGUNTAS ────────────────────────────────────────────
 const PREGUNTAS_GASTOS = [
-  { campo: 'destino',   pregunta: '📍 ¿Origen y destino?\nEjemplo: Irapuato - Guadalajara' },
-  { campo: 'dias',      pregunta: '📅 ¿Cuántos días duró el viaje?' },
-  { campo: 'anticipo',  pregunta: '💵 ¿Cuánto de anticipo te dieron?' },
-  { campo: 'comida',    pregunta: '🍽️ ¿Cuánto gastaste en comidas?\n(Si fue $0 escribe 0)' },
-  { campo: 'aguas',     pregunta: '💧 ¿Cuánto gastaste en aguas?\n(Si fue $0 escribe 0)' },
-  { campo: 'casetas',   pregunta: '🛣️ ¿Cuánto pagaste en casetas?\n(Si fue $0 escribe 0)' },
-  { campo: 'pension',   pregunta: '🅿️ ¿Cuánto de pensión?\n(Si fue $0 escribe 0)' },
-  { campo: 'federales', pregunta: '👮 ¿Cuánto de federales?\n(Si fue $0 escribe 0)' },
-  { campo: 'otros',     pregunta: '📦 ¿Algún otro gasto?\n(Si fue $0 escribe 0)' },
+  { campo: 'fecha_viaje', pregunta: '📅 ¿Fecha del viaje?\nEjemplo: 18/Abr' },
+  { campo: 'destino',     pregunta: '📍 ¿Origen y destino?\nEjemplo: Irapuato - Guadalajara' },
+  { campo: 'dias',        pregunta: '📅 ¿Cuántos días duró el viaje?' },
+  { campo: 'anticipo',    pregunta: '💵 ¿Cuánto de anticipo te dieron?' },
+  { campo: 'comida',      pregunta: '🍽️ ¿Cuánto gastaste en comidas?\n(Si fue $0 escribe 0)' },
+  { campo: 'aguas',       pregunta: '💧 ¿Cuánto gastaste en aguas?\n(Si fue $0 escribe 0)' },
+  { campo: 'casetas',     pregunta: '🛣️ ¿Cuánto pagaste en casetas?\n(Si fue $0 escribe 0)' },
+  { campo: 'pension',     pregunta: '🅿️ ¿Cuánto de pensión?\n(Si fue $0 escribe 0)' },
+  { campo: 'federales',   pregunta: '👮 ¿Cuánto de federales?\n(Si fue $0 escribe 0)' },
+  { campo: 'otros',       pregunta: '📦 ¿Algún otro gasto?\n(Si fue $0 escribe 0)' },
 ];
 
 const PREGUNTAS_DIESEL = [
@@ -126,7 +127,6 @@ async function saveOperador(chatId, nombre, tracto) {
   }
 }
 
-// ── CORRECCIÓN PRINCIPAL: se agrega columna "confirmado" (col G) ──
 async function getViajes() {
   const rows = await getRows(SHEET_BOT, 'Viajes');
   return rows
@@ -138,7 +138,7 @@ async function getViajes() {
       destino:    r[3],
       hora:       r[4],
       operador:   r[5] || '',
-      confirmado: r[6] || '',   // ← CORRECCIÓN: estaba faltando esta columna
+      confirmado: r[6] || '',
     }));
 }
 
@@ -149,14 +149,12 @@ async function saveViaje(v) {
   await appendRow(SHEET_BOT, 'Viajes', [idx, v.fecha, v.cliente, v.destino, v.hora, v.operador, '']);
 }
 
-// ── FUNCIÓN NUEVA: borrar viaje por índice ────────────────
 async function borrarViaje(idx) {
   const sheets = getSheetsClient();
   const rows = await getRows(SHEET_BOT, 'Viajes');
   const rowIdx = rows.findIndex(r => r[0] === String(idx));
   if (rowIdx < 0) return false;
 
-  // Obtener el sheetId de la pestaña "Viajes"
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_BOT });
   const sheet = meta.data.sheets.find(s => s.properties.title === 'Viajes');
   if (!sheet) return false;
@@ -169,7 +167,7 @@ async function borrarViaje(idx) {
           range: {
             sheetId:    sheet.properties.sheetId,
             dimension:  'ROWS',
-            startIndex: rowIdx,       // 0-based
+            startIndex: rowIdx,
             endIndex:   rowIdx + 1,
           }
         }
@@ -218,12 +216,25 @@ bot.onText(/\/start/, async (msg) => {
     const operador = ops[String(chatId)];
     if (operador) {
       bot.sendMessage(chatId,
-        `👋 Hola *${operador.nombre}* 🚛\n\n¿Qué necesitas?`,
+        `👋 Hola *${operador.nombre}* 🚛\n\n¿Qué necesitas?\n\n_Si algo falla escribe /reset_`,
         { parse_mode: 'Markdown', ...MENU_OPERADOR });
     } else {
       bot.sendMessage(chatId,
         `👋 Bienvenido al Bot de Transportes Regis 🚛\n\nPrimero regístrate con tu nombre y tracto:\n\n/registrar NOMBRE TRACTO\n\nEjemplo:\n/registrar Rafael 9`);
     }
+  }
+});
+
+// ── COMANDO /reset ────────────────────────────────────────
+bot.onText(/\/reset/, async (msg) => {
+  const chatId = msg.chat.id;
+  userState[chatId] = { estado: null };
+  const ops = await getOperadores();
+  const operador = ops[String(chatId)];
+  if (isAdmin(chatId)) {
+    bot.sendMessage(chatId, '🔄 Estado reiniciado', MENU_ADMIN);
+  } else if (operador) {
+    bot.sendMessage(chatId, '🔄 Listo, ¿qué necesitas?', { parse_mode: 'Markdown', ...MENU_OPERADOR });
   }
 });
 
@@ -249,7 +260,6 @@ bot.onText(/\/registrar (.+)/, async (msg, match) => {
 });
 
 // ── COMANDO /borrar ───────────────────────────────────────
-// Uso: /borrar 3
 bot.onText(/\/borrar (\d+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return;
@@ -288,7 +298,6 @@ bot.on('callback_query', async (query) => {
 
     const viajes = await getViajes();
 
-    // CORRECCIÓN: comparación sin importar mayúsculas/minúsculas ni espacios
     const miViaje = viajes.find(v =>
       v.operador.toLowerCase().trim() === operador.nombre.toLowerCase().trim() &&
       v.confirmado !== 'si'
@@ -318,9 +327,17 @@ bot.on('callback_query', async (query) => {
       `✅ *${operador.nombre}* confirmó su viaje\n📍 ${miViaje.destino} — ${miViaje.fecha}`,
       { parse_mode: 'Markdown' });
 
+    // Pedir remisión y caja
     bot.sendMessage(chatId,
-      `✅ ¡Viaje confirmado!\n\n📍 *${miViaje.destino}*\n📅 ${miViaje.fecha}\n\n¡Buen viaje! 🚛`,
+      `✅ ¡Viaje confirmado!\n\n📍 *${miViaje.destino}*\n📅 ${miViaje.fecha}\n\n📋 Ahora envíame tu remisión y caja (fotos o números).\nCuando termines escribe *listo*`,
       { parse_mode: 'Markdown' });
+
+    userState[chatId] = {
+      estado:   'esperando_remision',
+      viaje:    miViaje,
+      operador: operador,
+      archivos: []
+    };
     return;
   }
 
@@ -471,6 +488,43 @@ bot.on('message', async (msg) => {
     return bot.sendMessage(chatId, `✅ ${agregados} viaje(s) agregado(s). Sigue agregando o escribe *fin*`, { parse_mode: 'Markdown' });
   }
 
+  // ── Operador: Remisión y caja ──
+  if (estado === 'esperando_remision') {
+    const { viaje, operador: op, archivos } = userState[chatId];
+
+    if (msg.text.toLowerCase().trim() === 'listo') {
+      userState[chatId] = { estado: null };
+
+      if (archivos.length === 0) {
+        bot.sendMessage(chatId, '⚠️ No mandaste ninguna foto o número.\nManda tu remisión y caja primero, luego escribe *listo*', { parse_mode: 'Markdown' });
+        userState[chatId] = { estado: 'esperando_remision', viaje, operador: op, archivos };
+        return;
+      }
+
+      const caption = `📋 *Remisión/Caja de ${op.nombre}*\n📍 ${viaje.destino} — ${viaje.fecha}`;
+      notificarAdmins(caption, { parse_mode: 'Markdown' });
+
+      for (const archivo of archivos) {
+        if (archivo.tipo === 'foto') {
+          ADMIN_IDS.forEach(id => {
+            bot.sendPhoto(id, archivo.fileId).catch(e =>
+              console.error(`Error enviando foto a admin ${id}:`, e.message));
+          });
+        } else {
+          notificarAdmins(`📝 ${archivo.texto}`, {});
+        }
+      }
+
+      bot.sendMessage(chatId, `✅ Listo, le avisé a Fabiola 👍\n\n¡Buen viaje! 🚛`, { parse_mode: 'Markdown', ...MENU_OPERADOR });
+      return;
+    }
+
+    // Acumular texto
+    userState[chatId].archivos.push({ tipo: 'texto', texto: msg.text });
+    bot.sendMessage(chatId, `✅ Guardado. Sigue mandando o escribe *listo* cuando termines`, { parse_mode: 'Markdown' });
+    return;
+  }
+
   // ── Operador: Gastos ──
   if (estado === 'gastos') {
     const paso  = userState[chatId].paso;
@@ -495,7 +549,9 @@ bot.on('message', async (msg) => {
       const operador = ops[String(chatId)];
       const d        = userState[chatId].datos;
       userState[chatId] = { estado: null };
-      const fecha    = new Date().toLocaleDateString('es-MX');
+
+      // Usar la fecha que escribió el operador
+      const fecha = d.fecha_viaje;
 
       const total     = ['comida','aguas','casetas','pension','federales','bono','otros']
         .reduce((s, k) => s + parsearNumero(d[k]), 0);
@@ -513,12 +569,15 @@ bot.on('message', async (msg) => {
         ]);
       } catch (e) {
         console.error('❌ ERROR guardando gastos:', e.message);
-        bot.sendMessage(chatId, '⚠️ Error guardando gastos. Avisa a Fabiola.');
+        userState[chatId] = { estado: null };
+        bot.sendMessage(chatId, '⚠️ Error guardando gastos. Avisa a Fabiola.\n\nUsa /reset para reiniciar.', MENU_OPERADOR);
+        return;
       }
 
       const signo   = diferencia >= 0 ? '✅' : '⚠️';
       const resumen =
         `${signo} *Gastos registrados*\n\n` +
+        `📅 ${fecha}\n` +
         `📍 ${d.destino}\n` +
         `📅 ${d.dias} día(s)\n\n` +
         `💵 Anticipo:   $${anticipo.toFixed(2)}\n` +
@@ -535,7 +594,7 @@ bot.on('message', async (msg) => {
 
       const alertaAdmin =
         `💰 *Gastos de ${operador.nombre}*\n` +
-        `📍 ${d.destino} | ${d.dias} día(s)\n` +
+        `📅 ${fecha} | 📍 ${d.destino} | ${d.dias} día(s)\n` +
         `Anticipo: $${anticipo} | Total: $${total.toFixed(2)}\n` +
         `${diferencia >= 0 ? '✅' : '🔴'} Diferencia: $${diferencia.toFixed(2)}`;
       notificarAdmins(alertaAdmin, { parse_mode: 'Markdown' });
@@ -594,6 +653,15 @@ bot.on('message', async (msg) => {
 // ── FOTOS ─────────────────────────────────────────────────
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
+  const estado = userState[chatId]?.estado;
+
+  if (estado === 'esperando_remision') {
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    userState[chatId].archivos.push({ tipo: 'foto', fileId });
+    bot.sendMessage(chatId, `📸 Foto recibida. Sigue mandando o escribe *listo* cuando termines`, { parse_mode: 'Markdown' });
+    return;
+  }
+
   bot.sendMessage(chatId, 'Para reportar gastos usa el menú 👇', MENU_OPERADOR);
 });
 
