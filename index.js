@@ -126,18 +126,57 @@ async function saveOperador(chatId, nombre, tracto) {
   }
 }
 
+// ── CORRECCIÓN PRINCIPAL: se agrega columna "confirmado" (col G) ──
 async function getViajes() {
   const rows = await getRows(SHEET_BOT, 'Viajes');
   return rows
     .filter(r => r[0] && r[0] !== 'idx')
-    .map(r => ({ idx: r[0], fecha: r[1], cliente: r[2], destino: r[3], hora: r[4], operador: r[5] || '' }));
+    .map(r => ({
+      idx:        r[0],
+      fecha:      r[1],
+      cliente:    r[2],
+      destino:    r[3],
+      hora:       r[4],
+      operador:   r[5] || '',
+      confirmado: r[6] || '',   // ← CORRECCIÓN: estaba faltando esta columna
+    }));
 }
 
 async function saveViaje(v) {
   const rows = await getRows(SHEET_BOT, 'Viajes');
-  if (rows.length === 0) await appendRow(SHEET_BOT, 'Viajes', ['idx','fecha','cliente','destino','hora','operador']);
+  if (rows.length === 0) await appendRow(SHEET_BOT, 'Viajes', ['idx','fecha','cliente','destino','hora','operador','confirmado']);
   const idx = rows.filter(r => r[0] !== 'idx').length + 1;
-  await appendRow(SHEET_BOT, 'Viajes', [idx, v.fecha, v.cliente, v.destino, v.hora, v.operador]);
+  await appendRow(SHEET_BOT, 'Viajes', [idx, v.fecha, v.cliente, v.destino, v.hora, v.operador, '']);
+}
+
+// ── FUNCIÓN NUEVA: borrar viaje por índice ────────────────
+async function borrarViaje(idx) {
+  const sheets = getSheetsClient();
+  const rows = await getRows(SHEET_BOT, 'Viajes');
+  const rowIdx = rows.findIndex(r => r[0] === String(idx));
+  if (rowIdx < 0) return false;
+
+  // Obtener el sheetId de la pestaña "Viajes"
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_BOT });
+  const sheet = meta.data.sheets.find(s => s.properties.title === 'Viajes');
+  if (!sheet) return false;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SHEET_BOT,
+    resource: {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId:    sheet.properties.sheetId,
+            dimension:  'ROWS',
+            startIndex: rowIdx,       // 0-based
+            endIndex:   rowIdx + 1,
+          }
+        }
+      }]
+    }
+  });
+  return true;
 }
 
 async function ensureGastosHeader() {
@@ -209,12 +248,36 @@ bot.onText(/\/registrar (.+)/, async (msg, match) => {
   }
 });
 
+// ── COMANDO /borrar ───────────────────────────────────────
+// Uso: /borrar 3
+bot.onText(/\/borrar (\d+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const idx = match[1];
+  try {
+    const viajes = await getViajes();
+    const viaje  = viajes.find(v => v.idx === idx);
+    if (!viaje) return bot.sendMessage(chatId, `❌ No existe el viaje #${idx}`);
+
+    const ok = await borrarViaje(idx);
+    if (ok) {
+      bot.sendMessage(chatId,
+        `🗑️ Viaje #${idx} eliminado\n📍 ${viaje.destino} | ${viaje.fecha}`,
+        { parse_mode: 'Markdown', ...MENU_ADMIN });
+    } else {
+      bot.sendMessage(chatId, '❌ No se pudo borrar. Intenta de nuevo.');
+    }
+  } catch (e) {
+    console.error('Error borrando viaje:', e.message);
+    bot.sendMessage(chatId, '❌ Error al borrar. Intenta de nuevo.');
+  }
+});
+
 // ── CALLBACKS DE BOTONES ──────────────────────────────────
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data   = query.data;
 
-  // Confirmar siempre el callback para quitar el "reloj" de Telegram
   bot.answerCallbackQuery(query.id);
 
   // ── OPERADOR: Confirmar viaje ──
@@ -222,16 +285,23 @@ bot.on('callback_query', async (query) => {
     const ops = await getOperadores();
     const operador = ops[String(chatId)];
     if (!operador) return bot.sendMessage(chatId, '❌ No estás registrado.\nUsa /registrar NOMBRE TRACTO');
+
     const viajes = await getViajes();
-    const miViaje = viajes.find(v => v.operador === operador.nombre && v.confirmado !== 'si');
+
+    // CORRECCIÓN: comparación sin importar mayúsculas/minúsculas ni espacios
+    const miViaje = viajes.find(v =>
+      v.operador.toLowerCase().trim() === operador.nombre.toLowerCase().trim() &&
+      v.confirmado !== 'si'
+    );
+
     if (!miViaje) {
       return bot.sendMessage(chatId,
         '📋 No tienes viajes pendientes por confirmar.\n\n¿Qué más necesitas?',
         MENU_OPERADOR);
     }
-    // Guardar confirmación
+
     try {
-      const rows = await getRows(SHEET_BOT, 'Viajes');
+      const rows   = await getRows(SHEET_BOT, 'Viajes');
       const rowIdx = rows.findIndex(r => r[0] === String(miViaje.idx));
       if (rowIdx >= 0) {
         const sheets = getSheetsClient();
@@ -247,6 +317,7 @@ bot.on('callback_query', async (query) => {
     notificarAdmins(
       `✅ *${operador.nombre}* confirmó su viaje\n📍 ${miViaje.destino} — ${miViaje.fecha}`,
       { parse_mode: 'Markdown' });
+
     bot.sendMessage(chatId,
       `✅ ¡Viaje confirmado!\n\n📍 *${miViaje.destino}*\n📅 ${miViaje.fecha}\n\n¡Buen viaje! 🚛`,
       { parse_mode: 'Markdown' });
@@ -280,6 +351,7 @@ bot.on('callback_query', async (query) => {
       lista += '\n';
     });
     lista += `\nPara asignar: /asignar NUMERO NOMBRE`;
+    lista += `\nPara borrar:  /borrar NUMERO`;
     bot.sendMessage(chatId, lista, { parse_mode: 'Markdown', ...MENU_ADMIN });
     return;
   }
@@ -324,8 +396,10 @@ bot.on('callback_query', async (query) => {
     if (!isAdmin(chatId)) return;
     const ops    = await getOperadores();
     const viajes = await getViajes();
+    const confirmados = viajes.filter(v => v.confirmado === 'si').length;
+    const pendientes  = viajes.filter(v => v.confirmado !== 'si').length;
     bot.sendMessage(chatId,
-      `📊 *Resumen*\n\n🚛 Operadores: ${Object.keys(ops).length}\n📋 Viajes: ${viajes.length}`,
+      `📊 *Resumen*\n\n🚛 Operadores: ${Object.keys(ops).length}\n📋 Viajes totales: ${viajes.length}\n✅ Confirmados: ${confirmados}\n⏳ Pendientes: ${pendientes}`,
       { parse_mode: 'Markdown', ...MENU_ADMIN });
     return;
   }
@@ -382,6 +456,7 @@ bot.on('message', async (msg) => {
       let lista = `✅ *Viajes registrados:*\n\n`;
       viajes.forEach(v => { lista += `${v.idx}. ${v.fecha} | ${v.cliente} | ${v.destino}\n`; });
       lista += `\nUsa /asignar NUMERO NOMBRE`;
+      lista += `\nUsa /borrar NUMERO`;
       return bot.sendMessage(chatId, lista, { parse_mode: 'Markdown', ...MENU_ADMIN });
     }
     const lineas = msg.text.split('\n').filter(l => l.trim());
@@ -416,7 +491,6 @@ bot.on('message', async (msg) => {
       userState[chatId].paso = sig;
       bot.sendMessage(chatId, PREGUNTAS_GASTOS[sig].pregunta);
     } else {
-      // Guardar gastos
       const ops      = await getOperadores();
       const operador = ops[String(chatId)];
       const d        = userState[chatId].datos;
